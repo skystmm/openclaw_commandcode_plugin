@@ -2,6 +2,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { DEFAULT_MODEL } from './config.js';
 export class CommandCodeError extends Error {
+    code;
+    constructor(message, code) {
+        super(message);
+        this.code = code;
+    }
 }
 function threadId(sessionId) {
     if (!sessionId)

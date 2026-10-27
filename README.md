@@ -21,12 +21,14 @@ npm pack
 然后安装生成的包：
 
 ```bash
-openclaw plugins install /absolute/path/openclaw-commandcode-go-0.1.0.tgz
+openclaw plugins install /absolute/path/openclaw-commandcode-go-0.1.1.tgz
 ```
 
 按 CLI 提示审核本地来源并确认安装。配置键为 `commandcode-go`，模型 provider 为 `commandcode`。如果你已经安装了另一个注册 `commandcode` 的插件，请先解决 provider 重名。
 
 本地包会显示来源未验证的 provenance 警告；这是尚未经 npm/ClawHub 发布验证的开发包。
+
+从 GitHub 安装后，更新命令为 `openclaw plugins update commandcode-go`，然后重启 Gateway。
 
 开发目录安装（先构建）：
 
@@ -113,6 +115,32 @@ cmd login
 - 用量返回输入、输出和缓存 token；**首版没有价格目录，OpenClaw 中的零费用估算表示未知，不能视为免费或剩余额度**。以 Studio 账单为准。
 - `apiBase` 可指向你信任的 HTTPS origin，或用于测试的 loopback HTTP。该地址会收到 key 与会话内容。生成请求不跟随重定向。
 - 包中的 `api: openai-completions` 是宿主目录元数据；实际推理始终由 `createStreamFn` 走 CLI 协议。
+
+## 认证错误诊断（v0.1.1）
+
+OpenClaw 可能把不同的底层错误统一显示为 "Couldn't sign in"。v0.1.1 在请求失败时，通过宿主 logger 输出一条独立诊断：
+
+```text
+[commandcode-go] request_failed {"stage":"http","credentialSource":"runtime","httpStatus":401,"code":"AUTH_REJECTED"}
+```
+
+- `credentialSource: runtime`：使用宿主传入的凭据，可能来自已保存的 profile；它本身不证明是哪一个账号或 key 是否正确。
+- `stage: credentials`、`code: MISSING_CREDENTIAL`：插件尚未发出请求，未取得可用 key。
+- `stage: http`、`httpStatus: 401`：服务端拒绝实际请求的认证；不等于 CLI 中的所有凭据都已失效。
+- `httpStatus: 403`：请求被拒绝，需要进一步区分模型权限、套餐或访问策略。识别到的套餐/余额错误有单独 code。
+- `stage: stream`：HTTP 已连接，但随后生成流失败。
+- 没有这条诊断时，应先确认已加载 v0.1.1，并继续检查宿主在进入 provider 之前的失败。不要仅凭来源 provenance 警告认定认证失败。
+
+日志只包含固定类别、阶段、凭据来源类别及 HTTP 状态，不包含 key、key 指纹、请求内容、完整 URL 或服务端原始错误正文。
+
+```bash
+openclaw plugins update commandcode-go
+openclaw gateway restart
+openclaw plugins inspect commandcode-go
+openclaw logs --follow
+```
+
+在触发失败后查找 `[commandcode-go] request_failed`。`openclaw models status --agent main` 用于核对该 agent 实际选择的认证来源；CLI 能正常对话并不能单独证明 Gateway 发送了相同凭据或获得了相同路由权限。
 
 ## 开发验证
 

@@ -113,6 +113,31 @@ test('HTTP permission errors preserve category without exposing the upstream bod
   assert.doesNotMatch(final.errorMessage!, /user_TEST/);
 });
 
+test('auth rejection diagnostics retain HTTP status and credential source without exposing secrets', async () => {
+  for (const [status, code] of [[401, 'AUTH_REJECTED'], [403, 'PERMISSION_REJECTED']] as const) {
+    const diagnostics: unknown[] = [];
+    const stream = createCommandCodeStream({}, {
+      onDiagnostic: diagnostic => diagnostics.push(diagnostic),
+      fetch: async () => new Response(JSON.stringify({ error: { message: 'private upstream body user_TEST' } }), { status }),
+    });
+    const final = await (await stream(model, { messages: [user] }, { apiKey: 'user_TEST' })).result();
+    assert.equal(final.errorCode, code);
+    assert.deepEqual(diagnostics, [{ stage: 'http', credentialSource: 'runtime', httpStatus: status, code }]);
+    assert.doesNotMatch(JSON.stringify(diagnostics) + final.errorMessage, /user_TEST|private upstream body/);
+  }
+});
+
+test('missing credentials are distinguished from upstream authentication rejection', async () => {
+  const diagnostics: unknown[] = [];
+  let requests = 0;
+  const stream = createCommandCodeStream({}, { onDiagnostic: diagnostic => diagnostics.push(diagnostic),
+    fetch: async () => { requests++; return response([]); } });
+  const final = await (await stream(model, { messages: [user] }, { apiKey: '' })).result();
+  assert.equal(final.errorCode, 'MISSING_CREDENTIAL');
+  assert.deepEqual(diagnostics, [{ stage: 'credentials', credentialSource: 'missing', code: 'MISSING_CREDENTIAL' }]);
+  assert.equal(requests, 0);
+});
+
 test('SSE parsing survives split UTF-8 bytes, CRLF and multiline data', async () => {
   const bytes = new TextEncoder().encode(': keepalive\r\n\r\ndata: {"type":"text-delta",\r\ndata: "text":"杭州"}\r\n\r\n'
     + `data: ${JSON.stringify(finish)}\r\n\r\n`);

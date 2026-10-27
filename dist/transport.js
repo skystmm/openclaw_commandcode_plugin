@@ -16,15 +16,19 @@ function providerError(value, status) {
         ['RATE_LIMITED', /rate limit|usage limit|window.*exceed|throttl/, 'Command Code usage limit reached; wait for the window to reset.'],
         ['CONTEXT_LENGTH_EXCEEDED', /context.*(length|window)|prompt is too long/, 'Command Code context window exceeded.'],
         ['ZDR_UNAVAILABLE', /cmd zdr no providers/, 'No ZDR upstream is available for this model.'],
+        ['UPGRADE_REQUIRED', /upgrade required/, 'Command Code rejected this route for the account plan.'],
+        ['AUTH_REJECTED', /invalid api key|authentication failed|unauthorized|invalid token/, 'Command Code rejected the supplied credential.'],
     ];
     const match = categories.find(([, pattern]) => pattern.test(text));
     if (match)
-        return new CommandCodeError(`${match[0]}: ${match[2]}`);
-    if (status === 401 || status === 403)
-        return new CommandCodeError(`Command Code authentication or permission rejected (HTTP ${status}).`);
+        return new CommandCodeError(`${match[0]}: ${match[2]}`, match[0]);
+    if (status === 401)
+        return new CommandCodeError('Command Code rejected the credential (HTTP 401).', 'AUTH_REJECTED');
+    if (status === 403)
+        return new CommandCodeError('Command Code refused this request (HTTP 403); permission or route access may be restricted.', 'PERMISSION_REJECTED');
     if (status === 429)
-        return new CommandCodeError('RATE_LIMITED: Command Code usage limit reached.');
-    return new CommandCodeError(`Command Code ${status ? `HTTP ${status}` : 'stream'} error. Inspect the account in Studio.`);
+        return new CommandCodeError('RATE_LIMITED: Command Code usage limit reached.', 'RATE_LIMITED');
+    return new CommandCodeError(`Command Code ${status ? `HTTP ${status}` : 'stream'} error. Inspect the account in Studio.`, status ? 'HTTP_ERROR' : 'STREAM_ERROR');
 }
 function bounded(work, signal, timeoutMs, label) {
     return new Promise((resolve, reject) => {
@@ -117,6 +121,9 @@ export function createCommandCodeStream(rawConfig = {}, deps = {}) {
         if (options.signal?.aborted)
             abort();
         const message = outputMessage(model);
+        let stage = 'credentials';
+        let credentialSource = 'missing';
+        let httpStatus;
         const emit = (event) => stream.push(event);
         let active;
         const close = () => {
@@ -134,8 +141,13 @@ export function createCommandCodeStream(rawConfig = {}, deps = {}) {
             try {
                 controller.signal.throwIfAborted();
                 const key = options.apiKey ?? process.env.COMMANDCODE_API_KEY ?? process.env.COMMAND_CODE_API_KEY;
-                if (!key?.trim() || /[\r\n]/.test(key))
-                    throw new CommandCodeError('Missing or invalid Command Code API key');
+                if (!key?.trim())
+                    throw new CommandCodeError('Missing Command Code API key', 'MISSING_CREDENTIAL');
+                credentialSource = options.apiKey !== undefined ? 'runtime' : process.env.COMMANDCODE_API_KEY !== undefined
+                    ? 'COMMANDCODE_API_KEY' : 'COMMAND_CODE_API_KEY';
+                if (/[\r\n]/.test(key))
+                    throw new CommandCodeError('Invalid Command Code API key', 'INVALID_CREDENTIAL');
+                stage = 'prepare';
                 const requestMs = options.timeoutMs ?? config.requestTimeoutMs ?? 300000;
                 if (!Number.isSafeInteger(requestMs) || requestMs <= 0 || requestMs > 3600000)
                     throw new CommandCodeError('Invalid Command Code request timeout');
@@ -145,6 +157,7 @@ export function createCommandCodeStream(rawConfig = {}, deps = {}) {
                 const patched = options.onPayload ? await bounded(Promise.resolve(options.onPayload(body, model)), controller.signal, remaining(), 'Command Code payload preparation timeout') : undefined;
                 controller.signal.throwIfAborted();
                 const workingDir = deps.workingDir ?? process.cwd();
+                stage = 'connect';
                 const response = await bounded((deps.fetch ?? fetch)(`${config.apiBase ?? API_BASE}/alpha/generate`, {
                     method: 'POST', redirect: 'error', signal: controller.signal,
                     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', 'Accept-Encoding': 'identity',
@@ -153,6 +166,8 @@ export function createCommandCodeStream(rawConfig = {}, deps = {}) {
                         'x-taste-learning': 'false', 'x-co-flag': 'false', ...(config.zdr ? { 'x-cmd-zdr': '1' } : {}) },
                     body: stringifyBody(patched ?? body),
                 }), controller.signal, remaining(), 'Command Code request timeout');
+                stage = 'http';
+                httpStatus = response.status;
                 if (options.onResponse)
                     await bounded(Promise.resolve(options.onResponse({ status: response.status,
                         headers: Object.fromEntries(response.headers) }, model)), controller.signal, remaining(), 'Command Code response callback timeout');
@@ -188,6 +203,7 @@ export function createCommandCodeStream(rawConfig = {}, deps = {}) {
                 }
                 if (!response.body)
                     throw new CommandCodeError('Command Code returned no response stream');
+                stage = 'stream';
                 let finished = false;
                 let cacheWrite = 0;
                 const seenCalls = new Set();
@@ -279,6 +295,15 @@ export function createCommandCodeStream(rawConfig = {}, deps = {}) {
                 // Only our own safe errors are surfaced. Network causes may contain URLs/credentials.
                 message.errorMessage = message.stopReason === 'aborted' ? 'Command Code request aborted'
                     : error instanceof CommandCodeError ? error.message : 'Command Code request failed (network or transport error)';
+                const code = message.stopReason === 'aborted' ? 'ABORTED'
+                    : error instanceof CommandCodeError ? error.code ?? 'REQUEST_FAILED' : 'TRANSPORT_ERROR';
+                message.errorCode = code;
+                if (message.stopReason !== 'aborted') {
+                    try {
+                        deps.onDiagnostic?.({ stage, credentialSource, ...(httpStatus !== undefined ? { httpStatus } : {}), code });
+                    }
+                    catch { /* Diagnostics must never change request settlement. */ }
+                }
                 emit({ type: 'error', reason: message.stopReason, error: message });
             }
             finally {

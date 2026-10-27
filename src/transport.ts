@@ -2,9 +2,15 @@ import { createHash } from 'node:crypto';
 import { createAssistantMessageEventStream } from '@openclaw/ai/event-stream';
 import type { AssistantMessage, AssistantMessageEvent, Model, StreamFn } from '@openclaw/ai';
 import { API_BASE, CLI_VERSION, parseConfig, type PluginConfig } from './config.js';
-import { buildBody, stringifyBody, CommandCodeError } from './wire.js';
+import { buildBody, stringifyBody, CommandCodeError, type CommandCodeFailureCode } from './wire.js';
 
-type Dependencies = { fetch?: typeof fetch; workingDir?: string };
+export interface CommandCodeDiagnostic {
+  stage: 'credentials' | 'prepare' | 'connect' | 'http' | 'stream';
+  credentialSource: 'runtime' | 'COMMANDCODE_API_KEY' | 'COMMAND_CODE_API_KEY' | 'missing';
+  httpStatus?: number;
+  code: CommandCodeFailureCode;
+}
+type Dependencies = { fetch?: typeof fetch; workingDir?: string; onDiagnostic?: (diagnostic: CommandCodeDiagnostic) => void };
 type Event = Record<string, unknown>;
 const record = (v: unknown): Event => v && typeof v === 'object' && !Array.isArray(v) ? v as Event : {};
 const count = (v: unknown): number => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0;
@@ -15,18 +21,21 @@ function providerError(value: unknown, status?: number): Error {
   const detail = record(outer.error ?? outer);
   const code = String(detail.code ?? detail.type ?? '');
   const text = `${code} ${String(detail.message ?? outer.message ?? value)}`.toLowerCase().replaceAll('_', ' ');
-  const categories: [string, RegExp, string][] = [
+  const categories: [CommandCodeFailureCode, RegExp, string][] = [
     ['MODEL_NOT_IN_PLAN', /model not in plan/, 'Model is not included in this account plan.'],
     ['INSUFFICIENT_CREDITS', /insufficient credits|premium credits exhausted/, 'Command Code credits exhausted.'],
     ['RATE_LIMITED', /rate limit|usage limit|window.*exceed|throttl/, 'Command Code usage limit reached; wait for the window to reset.'],
     ['CONTEXT_LENGTH_EXCEEDED', /context.*(length|window)|prompt is too long/, 'Command Code context window exceeded.'],
     ['ZDR_UNAVAILABLE', /cmd zdr no providers/, 'No ZDR upstream is available for this model.'],
+    ['UPGRADE_REQUIRED', /upgrade required/, 'Command Code rejected this route for the account plan.'],
+    ['AUTH_REJECTED', /invalid api key|authentication failed|unauthorized|invalid token/, 'Command Code rejected the supplied credential.'],
   ];
   const match = categories.find(([, pattern]) => pattern.test(text));
-  if (match) return new CommandCodeError(`${match[0]}: ${match[2]}`);
-  if (status === 401 || status === 403) return new CommandCodeError(`Command Code authentication or permission rejected (HTTP ${status}).`);
-  if (status === 429) return new CommandCodeError('RATE_LIMITED: Command Code usage limit reached.');
-  return new CommandCodeError(`Command Code ${status ? `HTTP ${status}` : 'stream'} error. Inspect the account in Studio.`);
+  if (match) return new CommandCodeError(`${match[0]}: ${match[2]}`, match[0]);
+  if (status === 401) return new CommandCodeError('Command Code rejected the credential (HTTP 401).', 'AUTH_REJECTED');
+  if (status === 403) return new CommandCodeError('Command Code refused this request (HTTP 403); permission or route access may be restricted.', 'PERMISSION_REJECTED');
+  if (status === 429) return new CommandCodeError('RATE_LIMITED: Command Code usage limit reached.', 'RATE_LIMITED');
+  return new CommandCodeError(`Command Code ${status ? `HTTP ${status}` : 'stream'} error. Inspect the account in Studio.`, status ? 'HTTP_ERROR' : 'STREAM_ERROR');
 }
 
 function bounded<T>(work: Promise<T>, signal: AbortSignal, timeoutMs: number, label: string): Promise<T> {
@@ -101,6 +110,9 @@ export function createCommandCodeStream(rawConfig: PluginConfig = {}, deps: Depe
     options.signal?.addEventListener('abort', abort, { once: true });
     if (options.signal?.aborted) abort();
     const message = outputMessage(model);
+    let stage: CommandCodeDiagnostic['stage'] = 'credentials';
+    let credentialSource: CommandCodeDiagnostic['credentialSource'] = 'missing';
+    let httpStatus: number | undefined;
     const emit = (event: AssistantMessageEvent) => stream.push(event);
     let active: { type: 'text' | 'thinking'; index: number } | undefined;
     const close = () => {
@@ -115,7 +127,11 @@ export function createCommandCodeStream(rawConfig: PluginConfig = {}, deps: Depe
       try {
         controller.signal.throwIfAborted();
         const key = options.apiKey ?? process.env.COMMANDCODE_API_KEY ?? process.env.COMMAND_CODE_API_KEY;
-        if (!key?.trim() || /[\r\n]/.test(key)) throw new CommandCodeError('Missing or invalid Command Code API key');
+        if (!key?.trim()) throw new CommandCodeError('Missing Command Code API key', 'MISSING_CREDENTIAL');
+        credentialSource = options.apiKey !== undefined ? 'runtime' : process.env.COMMANDCODE_API_KEY !== undefined
+          ? 'COMMANDCODE_API_KEY' : 'COMMAND_CODE_API_KEY';
+        if (/[\r\n]/.test(key)) throw new CommandCodeError('Invalid Command Code API key', 'INVALID_CREDENTIAL');
+        stage = 'prepare';
         const requestMs = options.timeoutMs ?? config.requestTimeoutMs ?? 300000;
         if (!Number.isSafeInteger(requestMs) || requestMs <= 0 || requestMs > 3600000) throw new CommandCodeError('Invalid Command Code request timeout');
         const startedAt = Date.now();
@@ -125,6 +141,7 @@ export function createCommandCodeStream(rawConfig: PluginConfig = {}, deps: Depe
           remaining(), 'Command Code payload preparation timeout') : undefined;
         controller.signal.throwIfAborted();
         const workingDir = deps.workingDir ?? process.cwd();
+        stage = 'connect';
         const response = await bounded((deps.fetch ?? fetch)(`${config.apiBase ?? API_BASE}/alpha/generate`, {
           method: 'POST', redirect: 'error', signal: controller.signal,
           headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', 'Accept-Encoding': 'identity',
@@ -133,6 +150,8 @@ export function createCommandCodeStream(rawConfig: PluginConfig = {}, deps: Depe
             'x-taste-learning': 'false', 'x-co-flag': 'false', ...(config.zdr ? { 'x-cmd-zdr': '1' } : {}) },
           body: stringifyBody(patched ?? body),
         }), controller.signal, remaining(), 'Command Code request timeout');
+        stage = 'http';
+        httpStatus = response.status;
         if (options.onResponse) await bounded(Promise.resolve(options.onResponse({ status: response.status,
           headers: Object.fromEntries(response.headers) }, model)), controller.signal, remaining(), 'Command Code response callback timeout');
         if (!response.ok) {
@@ -155,6 +174,7 @@ export function createCommandCodeStream(rawConfig: PluginConfig = {}, deps: Depe
           throw providerError(detail, response.status);
         }
         if (!response.body) throw new CommandCodeError('Command Code returned no response stream');
+        stage = 'stream';
         let finished = false;
         let cacheWrite = 0;
         const seenCalls = new Set<string>();
@@ -230,6 +250,13 @@ export function createCommandCodeStream(rawConfig: PluginConfig = {}, deps: Depe
         // Only our own safe errors are surfaced. Network causes may contain URLs/credentials.
         message.errorMessage = message.stopReason === 'aborted' ? 'Command Code request aborted'
           : error instanceof CommandCodeError ? error.message : 'Command Code request failed (network or transport error)';
+        const code: CommandCodeFailureCode = message.stopReason === 'aborted' ? 'ABORTED'
+          : error instanceof CommandCodeError ? error.code ?? 'REQUEST_FAILED' : 'TRANSPORT_ERROR';
+        message.errorCode = code;
+        if (message.stopReason !== 'aborted') {
+          try { deps.onDiagnostic?.({ stage, credentialSource, ...(httpStatus !== undefined ? { httpStatus } : {}), code }); }
+          catch { /* Diagnostics must never change request settlement. */ }
+        }
         emit({ type: 'error', reason: message.stopReason, error: message });
       } finally {
         options.signal?.removeEventListener('abort', abort);

@@ -1,6 +1,9 @@
 import type { Context, Model, SimpleStreamOptions } from '@openclaw/ai';
 import { type PluginConfig } from './config.js';
+export type CommandCodeFailureCode = 'MISSING_CREDENTIAL' | 'INVALID_CREDENTIAL' | 'AUTH_REJECTED' | 'PERMISSION_REJECTED' | 'MODEL_NOT_IN_PLAN' | 'INSUFFICIENT_CREDITS' | 'RATE_LIMITED' | 'CONTEXT_LENGTH_EXCEEDED' | 'ZDR_UNAVAILABLE' | 'UPGRADE_REQUIRED' | 'HTTP_ERROR' | 'STREAM_ERROR' | 'REQUEST_FAILED' | 'TRANSPORT_ERROR' | 'ABORTED';
 export declare class CommandCodeError extends Error {
+    readonly code?: CommandCodeFailureCode | undefined;
+    constructor(message: string, code?: CommandCodeFailureCode | undefined);
 }
 export declare function buildBody(model: Model, context: Context, options: SimpleStreamOptions, config: PluginConfig, workingDir?: string): {
     config: {

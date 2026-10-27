@@ -1,7 +1,7 @@
 {
   "id": "commandcode-go",
   "name": "Command Code Go",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Command Code Go plan models via the CLI HTTP transport",
   "providers": ["commandcode"],
   "setup": { "providers": [{ "id": "commandcode", "envVars": ["COMMANDCODE_API_KEY", "COMMAND_CODE_API_KEY"] }] },

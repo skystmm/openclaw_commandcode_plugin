@@ -3,6 +3,8 @@ import test from 'node:test';
 import { createServer } from 'node:http';
 import type { Model } from '@openclaw/ai';
 import { createCommandCodeStream } from '../src/transport.js';
+import entry from '../src/index.js';
+import type { OpenClawPluginApi, ProviderPlugin } from 'openclaw/plugin-sdk/plugin-entry';
 
 test('real HTTP transport sends Go headers and supports host payload/response callbacks', async () => {
   let received: Record<string, unknown> = {};
@@ -40,5 +42,39 @@ test('real HTTP transport sends Go headers and supports host payload/response ca
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
+
+test('registered provider logs safe upstream rejection details before the host masks the error', async () => {
+  const logs: string[] = [];
+  const server = createServer((_req, res) => {
+    res.writeHead(401, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: { code: 'invalid_api_key', message: 'secret local-private-test-key' } }));
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== 'string');
+    let provider: ProviderPlugin | undefined;
+    entry.register!({ pluginConfig: { apiBase: `http://127.0.0.1:${address.port}` },
+      logger: { warn: (message: string) => logs.push(message) },
+      registerProvider: (value: ProviderPlugin) => { provider = value; }, registerModelCatalogProvider: () => {},
+    } as unknown as OpenClawPluginApi);
+    type ResolveContext = Parameters<NonNullable<ProviderPlugin['resolveDynamicModel']>>[0];
+    const model = provider!.resolveDynamicModel!({ modelId: 'deepseek/deepseek-v4.1-flash', provider: 'commandcode' } as ResolveContext)!;
+    type StreamContext = Parameters<NonNullable<ProviderPlugin['createStreamFn']>>[0];
+    const stream = provider!.createStreamFn!({ model } as StreamContext)!;
+    const final = await (await stream(model, { messages: [{ role: 'user', content: 'hi', timestamp: 1 }] }, {
+      apiKey: 'local-private-test-key',
+    })).result();
+    assert.equal(final.errorCode, 'AUTH_REJECTED');
+    assert.equal(logs.length, 1);
+    assert.match(logs[0]!, /^\[commandcode-go\] request_failed /);
+    const diagnostic = JSON.parse(logs[0]!.slice('[commandcode-go] request_failed '.length));
+    assert.deepEqual(diagnostic, { stage: 'http', credentialSource: 'runtime', httpStatus: 401, code: 'AUTH_REJECTED' });
+    assert.doesNotMatch(logs.join(''), /local-private-test-key|secret|127\.0\.0\.1/);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
   }
 });

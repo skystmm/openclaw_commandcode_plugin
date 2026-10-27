@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,8 @@ const env = { PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ''}`, HO
   OPENCLAW_STATE_DIR: resolve(state, 'state'), OPENCLAW_CONFIG_PATH: resolve(state, 'state/openclaw.json'),
   npm_config_cache: resolve(state, 'npm-cache'), npm_config_fetch_retries: '0', npm_config_fetch_timeout: '30000',
   NO_COLOR: '1' };
-const artifact = resolve(root, 'openclaw-commandcode-go-0.1.0.tgz');
+const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
+const artifact = resolve(root, `${pkg.name}-${pkg.version}.tgz`);
 for (const args of [
   ...existingState ? [] : [['plugins', 'install', artifact, '--force', '--accept-capabilities']],
   ['plugins', 'inspect', 'commandcode-go', '--json'],

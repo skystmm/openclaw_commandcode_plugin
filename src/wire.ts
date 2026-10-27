@@ -3,7 +3,14 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Context, Model, SimpleStreamOptions } from '@openclaw/ai';
 import { DEFAULT_MODEL, type PluginConfig } from './config.js';
 
-export class CommandCodeError extends Error {}
+export type CommandCodeFailureCode = 'MISSING_CREDENTIAL' | 'INVALID_CREDENTIAL' | 'AUTH_REJECTED'
+  | 'PERMISSION_REJECTED' | 'MODEL_NOT_IN_PLAN' | 'INSUFFICIENT_CREDITS' | 'RATE_LIMITED'
+  | 'CONTEXT_LENGTH_EXCEEDED' | 'ZDR_UNAVAILABLE' | 'UPGRADE_REQUIRED' | 'HTTP_ERROR'
+  | 'STREAM_ERROR' | 'REQUEST_FAILED' | 'TRANSPORT_ERROR' | 'ABORTED';
+
+export class CommandCodeError extends Error {
+  constructor(message: string, readonly code?: CommandCodeFailureCode) { super(message); }
+}
 
 function threadId(sessionId?: string): string {
   if (!sessionId) return randomUUID();

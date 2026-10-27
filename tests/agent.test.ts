@@ -6,9 +6,9 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
-test('OpenClaw embedded agent executes a tool and returns its result through the Go provider', { timeout: 180000 }, async () => {
+test('OpenClaw saved API-key profile reaches Go transport and completes a tool round trip', { timeout: 180000 }, async () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const state = mkdtempSync(resolve(tmpdir(), 'commandcode-go-agent-'));
   const fixture = resolve(state, 'plugin');
@@ -46,12 +46,20 @@ test('OpenClaw embedded agent executes a tool and returns its result through the
       // Test a direct tool round trip; 2026.10.7 defers schemas behind tool_search by default.
       tools: { allow: ['session_status'], toolSearch: false, codeMode: false },
     }));
+    const env = { PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ''}`, HOME: resolve(state, 'home'),
+      OPENCLAW_STATE_DIR: state, OPENCLAW_CONFIG_PATH: configPath, NO_COLOR: '1',
+      OPENCLAW_DIAGNOSTICS: '1', OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: resolve(state, 'timeline.jsonl') };
+    const profileSetup = spawnSync(process.execPath, ['--input-type=module', '--eval', `
+      import { upsertAuthProfile } from 'openclaw/plugin-sdk/provider-auth';
+      upsertAuthProfile({ profileId: 'commandcode:default', credential: {
+        type: 'api_key', provider: 'commandcode', key: 'local-agent-test-only'
+      }, agentDir: ${JSON.stringify(resolve(state, 'agents/main/agent'))} });
+    `], { cwd: root, env, encoding: 'utf8', timeout: 30000 });
+    assert.equal(profileSetup.status, 0, profileSetup.stderr);
     const cli = fileURLToPath(new URL('../../openclaw.mjs', import.meta.resolve('openclaw/plugin-sdk/plugin-entry')));
     const child = spawn(process.execPath, [cli, 'agent', '--local', '--session-id', randomUUID(),
       '--message', 'Check session status, then answer.', '--json', '--timeout', '60'], {
-      cwd: root, env: { PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ''}`, HOME: resolve(state, 'home'),
-        OPENCLAW_STATE_DIR: state, OPENCLAW_CONFIG_PATH: configPath, COMMANDCODE_API_KEY: 'local-agent-test-only', NO_COLOR: '1',
-        OPENCLAW_DIAGNOSTICS: '1', OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: resolve(state, 'timeline.jsonl') },
+      cwd: root, env,
     });
     let stdout = ''; let stderr = '';
     child.stdout.on('data', data => { stdout += data; });
