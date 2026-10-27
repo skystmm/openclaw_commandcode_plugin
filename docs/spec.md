@@ -4,7 +4,7 @@ Target OpenClaw: 2026.10.7. A separate package adapts OpenClaw messages and tool
 
 Acceptance: native plugin registration and API-key setup; configurable selected model; text/thinking/tool streams and complete tool round trip; stable session UUID; schema validation; bounded HTTP/idle deadlines; cancellation and in-band errors produce one terminal message; key and provider response secrets do not appear in diagnostics; installable built npm package with upstream MIT notices.
 
-Design: use `registerProvider.createStreamFn` for `/alpha/generate` only. Never fall back to another billing route. Keep a small known Go model default and allow explicit model selection; server owns model permissions. No automatic paid probes. Tests use local/mock HTTP and the pinned SDK contracts.
+Design: Go plan only. Use the native `pi-messages` model API slot with `registerProvider.createStreamFn` and `wrapSimpleCompletionStreamFn` for `/alpha/generate` only. Normalize legacy generic API model rows at runtime. An unavailable Go transport must stop instead of invoking an OpenAI API adapter. Never fall back to another billing route. Keep a small known Go model default and allow explicit model selection; server owns model permissions. No automatic paid probes. Tests use local/mock HTTP and the pinned SDK contracts.
 
 Non-goals for v0.1: browser sign-in, credential-file scanning, account rotation, quota dashboard, images, web search, full live catalog synchronization, publication or modifying the user's gateway setup. Unsupported image input must fail visibly instead of being silently dropped. Follow-up browser sign-in can reuse the upstream callback design after this transport is verified.
 

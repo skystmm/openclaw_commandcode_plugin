@@ -1,6 +1,6 @@
 # Command Code Go for OpenClaw
 
-面向 **OpenClaw 2026.10.7** 的独立模型 provider 插件。使用你自己的 Command Code Go 账号 key，通过 `/alpha/generate` CLI HTTP 协议生成内容。工具由 OpenClaw 执行，插件负责消息和流协议转换。
+面向 **OpenClaw 2026.10.7**、仅适配 **Command Code Go 套餐**的独立模型 provider 插件。使用你自己的 Go 账号 key，通过 `/alpha/generate` CLI HTTP 协议生成内容。工具由 OpenClaw 执行，插件负责消息和流协议转换。其他套餐及标准 Provider API 请使用对应的官方集成。
 
 这是社区适配。Go 官方不包含标准 Provider API；拿到 key 不会增加套餐或模型权限。真实 Go 账号的当前可用性与额度扣减仍需实测。
 
@@ -21,7 +21,7 @@ npm pack
 然后安装生成的包：
 
 ```bash
-openclaw plugins install /absolute/path/openclaw-commandcode-go-0.1.1.tgz
+openclaw plugins install /absolute/path/openclaw-commandcode-go-0.1.2.tgz
 ```
 
 按 CLI 提示审核本地来源并确认安装。配置键为 `commandcode-go`，模型 provider 为 `commandcode`。如果你已经安装了另一个注册 `commandcode` 的插件，请先解决 provider 重名。
@@ -114,7 +114,20 @@ cmd login
 - 不支持图片、网页搜索、浏览器登录、多账号轮换或余额看板。图片输入、非 object 根工具 schema、stop sequences 与 responseFormat 会明确报错。
 - 用量返回输入、输出和缓存 token；**首版没有价格目录，OpenClaw 中的零费用估算表示未知，不能视为免费或剩余额度**。以 Studio 账单为准。
 - `apiBase` 可指向你信任的 HTTPS origin，或用于测试的 loopback HTTP。该地址会收到 key 与会话内容。生成请求不跟随重定向。
-- 包中的 `api: openai-completions` 是宿主目录元数据；实际推理始终由 `createStreamFn` 走 CLI 协议。
+- v0.1.2 使用宿主的 `pi-messages` 原生传输槽，普通轮次和辅助补全都走 CLI 协议。专用传输不可用时停止请求，不退回 OpenAI-compatible API。
+- 已保存的 `commandcode` 模型即使仍标为 `openai-completions`、URL 仍是 `/provider/v1`，也会在运行时归一化为 Go CLI 传输；不删除或覆盖你的配置、key profile。请勿为了 Go 套餐另建普通 OpenAI-compatible provider。
+
+## 升级到 Go 专用传输（v0.1.2）
+
+```bash
+openclaw plugins update commandcode-go
+openclaw gateway restart
+openclaw plugins inspect commandcode-go
+```
+
+确认版本为 `0.1.2`。模型引用仍为 `commandcode/deepseek/deepseek-v4.1-flash`，原 `commandcode:default` key profile 继续使用。在需要切换的现有聊天里执行 `/model commandcode/deepseek/deepseek-v4.1-flash -s`。
+
+该版本解决了把 Go 模型标成普通 API 的回退风险。本地测试用“普通 API 固定返回 Go 套餐 403、只有 CLI 可用”的服务验证；真实 Go 账号的服务端权限和额度仍需在你的环境确认。
 
 ## 认证错误诊断（v0.1.1）
 
@@ -129,7 +142,7 @@ OpenClaw 可能把不同的底层错误统一显示为 "Couldn't sign in"。v0.1
 - `stage: http`、`httpStatus: 401`：服务端拒绝实际请求的认证；不等于 CLI 中的所有凭据都已失效。
 - `httpStatus: 403`：请求被拒绝，需要进一步区分模型权限、套餐或访问策略。识别到的套餐/余额错误有单独 code。
 - `stage: stream`：HTTP 已连接，但随后生成流失败。
-- 没有这条诊断时，应先确认已加载 v0.1.1，并继续检查宿主在进入 provider 之前的失败。不要仅凭来源 provenance 警告认定认证失败。
+- 没有这条诊断时，应先确认已加载 v0.1.1 或以上版本，并继续检查宿主在进入 provider 之前的失败。不要仅凭来源 provenance 警告认定认证失败。
 
 日志只包含固定类别、阶段、凭据来源类别及 HTTP 状态，不包含 key、key 指纹、请求内容、完整 URL 或服务端原始错误正文。
 
@@ -156,6 +169,8 @@ npm pack --dry-run
 `npm test` 包含临时 loopback HTTP 服务，需要允许绑定本机端口。`test:host` 将所有测试配置、HOME 和状态放在本目录 `.scratch/`。`test:agent` 使用系统临时目录、虚构 key 和本机模型服务验证真实宿主工具执行；冷启动会捕获依赖，可能需要一分钟左右。测试明确关闭 `toolSearch` 和 `codeMode` 来验证直接工具调用；不要求你修改日常工具设置。以上测试不使用你的真实账号或 Gateway 配置。使用符合版本要求的 Node 执行命令。
 
 `npm run test:install` 会在系统临时目录安装已构建的 `.tgz`，需要联网下载运行依赖。安装后的 Doctor 会提示本地包来源尚未验证，脚本只允许这一项已知警告。
+
+`COMMANDCODE_TEST_INSTALLED=1 npm run test:agent`（Bash/zsh）还会在临时 HOME 安装已打包的插件，以实际全局安装来源、已保存 key profile 和残留旧 API 配置验证同一个工具循环；需要先运行 `npm pack`，并允许下载公开运行依赖。
 
 详细验收范围与边界见 `docs/spec.md`，实际验证记录见 `docs/verification.md`。
 

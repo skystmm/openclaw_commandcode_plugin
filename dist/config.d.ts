@@ -1,4 +1,5 @@
 export declare const PROVIDER_ID = "commandcode";
+export declare const GO_API = "pi-messages";
 export declare const DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash";
 export declare const API_BASE = "https://api.commandcode.ai";
 export declare const CLI_VERSION = "1.88.0";

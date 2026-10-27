@@ -1,6 +1,6 @@
 import { definePluginEntry, buildJsonPluginConfigSchema } from 'openclaw/plugin-sdk/plugin-entry';
 import { createProviderApiKeyAuthMethod } from 'openclaw/plugin-sdk/provider-auth';
-import { API_BASE, DEFAULT_MODEL, PROVIDER_ID, configSchema, parseConfig } from './config.js';
+import { API_BASE, DEFAULT_MODEL, GO_API, PROVIDER_ID, configSchema, parseConfig } from './config.js';
 import { createCommandCodeStream } from './transport.js';
 export function createProvider(config, onDiagnostic) {
     const settings = parseConfig(config);
@@ -23,17 +23,23 @@ export function createProvider(config, onDiagnostic) {
             })],
         resolveDynamicModel: ctx => {
             const model = models.find(item => item.id === ctx.modelId);
-            return model ? { ...model, provider: PROVIDER_ID, api: 'openai-completions', baseUrl: settings.apiBase ?? API_BASE } : undefined;
+            return model ? { ...model, provider: PROVIDER_ID, api: GO_API, baseUrl: settings.apiBase ?? API_BASE } : undefined;
+        },
+        // Apply even when a previously saved models.providers row selects a generic API.
+        normalizeResolvedModel: ctx => {
+            const baseUrl = settings.apiBase ?? API_BASE;
+            return ctx.model.api === GO_API && ctx.model.baseUrl === baseUrl ? undefined : { ...ctx.model, api: GO_API, baseUrl };
         },
         catalog: { order: 'simple', run: async (ctx) => {
                 const key = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
                 if (!key)
                     return null;
-                return { provider: { baseUrl: settings.apiBase ?? API_BASE, api: 'openai-completions',
+                return { provider: { baseUrl: settings.apiBase ?? API_BASE, api: GO_API,
                         apiKey: key, models } };
             } },
-        // API name is host model metadata only. Every request uses our CLI transport.
+        // Both normal turns and direct/utility completions enforce the same Go wire contract.
         createStreamFn: ctx => createCommandCodeStream(settings, { workingDir: ctx.workspaceDir, onDiagnostic }),
+        wrapSimpleCompletionStreamFn: ctx => createCommandCodeStream(settings, { workingDir: ctx.workspaceDir, onDiagnostic }),
     };
 }
 export default definePluginEntry({

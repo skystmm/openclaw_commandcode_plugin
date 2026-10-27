@@ -1,4 +1,6 @@
 export const PROVIDER_ID = 'commandcode';
+// Native message slot: never eligible for a built-in OpenAI HTTP transport.
+export const GO_API = 'pi-messages';
 export const DEFAULT_MODEL = 'deepseek/deepseek-v4.1-flash';
 export const API_BASE = 'https://api.commandcode.ai';
 export const CLI_VERSION = '1.88.0';

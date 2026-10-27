@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createServer } from 'node:http';
 import type { Model } from '@openclaw/ai';
 import { createCommandCodeStream } from '../src/transport.js';
-import entry from '../src/index.js';
+import entry, { createProvider } from '../src/index.js';
 import type { OpenClawPluginApi, ProviderPlugin } from 'openclaw/plugin-sdk/plugin-entry';
 
 test('real HTTP transport sends Go headers and supports host payload/response callbacks', async () => {
@@ -73,6 +73,44 @@ test('registered provider logs safe upstream rejection details before the host m
     const diagnostic = JSON.parse(logs[0]!.slice('[commandcode-go] request_failed '.length));
     assert.deepEqual(diagnostic, { stage: 'http', credentialSource: 'runtime', httpStatus: 401, code: 'AUTH_REJECTED' });
     assert.doesNotMatch(logs.join(''), /local-private-test-key|secret|127\.0\.0\.1/);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
+test('Go utility completions replace a standard API adapter and only call the CLI endpoint', async () => {
+  const paths: string[] = [];
+  let genericAdapterUsed = false;
+  const server = createServer(async (req, res) => {
+    paths.push(req.url!);
+    if (req.url !== '/alpha/generate') {
+      res.writeHead(403); res.end("Your Go plan doesn't include API access."); return;
+    }
+    let text = '';
+    for await (const chunk of req) text += chunk;
+    const body = JSON.parse(text);
+    assert.equal(body.params.max_tokens, 64);
+    assert.equal(body.params.model, 'deepseek/deepseek-v4.1-flash');
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end('data: {"type":"text-delta","text":"A short title"}\n\ndata: {"type":"finish","finishReason":"stop"}\n\n');
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== 'string');
+    const provider = createProvider({ apiBase: `http://127.0.0.1:${address.port}` });
+    type ResolveContext = Parameters<NonNullable<ProviderPlugin['resolveDynamicModel']>>[0];
+    const model = provider.resolveDynamicModel!({ modelId: 'deepseek/deepseek-v4.1-flash' } as ResolveContext)!;
+    type WrapperContext = Parameters<NonNullable<ProviderPlugin['wrapSimpleCompletionStreamFn']>>[0];
+    const stream = provider.wrapSimpleCompletionStreamFn!({ model, provider: 'commandcode', modelId: model.id,
+      streamFn: () => { genericAdapterUsed = true; throw new Error("403 Your Go plan doesn't include API access."); },
+    } as WrapperContext)!;
+    const answer = await (await stream(model, { messages: [{ role: 'user', content: 'title', timestamp: 1 }] },
+      { apiKey: 'local-go-test', maxTokens: 64 })).result();
+    assert.equal(answer.stopReason, 'stop');
+    assert.deepEqual(paths, ['/alpha/generate']);
+    assert.equal(genericAdapterUsed, false);
   } finally {
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));

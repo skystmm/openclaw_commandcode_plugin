@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, writeFileSync, mkdirSync, cpSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, cpSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,19 +8,28 @@ import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 
-test('OpenClaw saved API-key profile reaches Go transport and completes a tool round trip', { timeout: 180000 }, async () => {
+const installed = process.env.COMMANDCODE_TEST_INSTALLED === '1';
+test(`OpenClaw ${installed ? 'installed archive' : 'source plugin'} with a saved API-key profile overrides legacy API config and completes a Go tool round trip`, { timeout: 360000 }, async () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const state = mkdtempSync(resolve(tmpdir(), 'commandcode-go-agent-'));
   const fixture = resolve(state, 'plugin');
-  mkdirSync(fixture);
-  for (const name of ['dist', 'package.json', 'openclaw.plugin.json']) cpSync(resolve(root, name), resolve(fixture, name), { recursive: true });
-  symlinkSync(resolve(root, 'node_modules'), resolve(fixture, 'node_modules'), 'dir');
+  if (!installed) {
+    mkdirSync(fixture);
+    for (const name of ['dist', 'package.json', 'openclaw.plugin.json']) cpSync(resolve(root, name), resolve(fixture, name), { recursive: true });
+    symlinkSync(resolve(root, 'node_modules'), resolve(fixture, 'node_modules'), 'dir');
+  }
   const requests: { params: { tools: { name: string }[]; messages: { role: string; content: { type: string; toolName?: string; output?: { type: string; value: string } }[] }[] }; threadId: string }[] = [];
   let serverError: Error | undefined;
   const server = createServer(async (req, res) => {
     try {
       let text = '';
       for await (const chunk of req) text += chunk;
+      if (req.url !== '/alpha/generate') {
+        serverError = new Error(`Go request escaped to a standard API route: ${req.url}`);
+        res.writeHead(403, { 'content-type': 'text/plain' });
+        res.end("Your Go plan doesn't include API access. Upgrade to Provider or higher to use these endpoints.");
+        return;
+      }
       assert.equal(req.url, '/alpha/generate');
       assert.equal(req.headers.authorization, 'Bearer local-agent-test-only');
       const body = JSON.parse(text);
@@ -39,16 +48,30 @@ test('OpenClaw saved API-key profile reaches Go transport and completes a tool r
     assert.ok(address && typeof address !== 'string');
     const configPath = resolve(state, 'openclaw.json');
     writeFileSync(configPath, JSON.stringify({
-      plugins: { allow: ['commandcode-go'], load: { paths: [fixture] }, entries: { 'commandcode-go': { enabled: true,
+      plugins: { allow: ['commandcode-go'], ...!installed ? { load: { paths: [fixture] } } : {}, entries: { 'commandcode-go': { enabled: true,
         config: { apiBase: `http://127.0.0.1:${address.port}` } } } },
       agents: { defaults: { workspace: resolve(state, 'workspace'), skipBootstrap: true,
         model: { primary: 'commandcode/deepseek/deepseek-v4.1-flash' } } },
+      // Legacy configuration must not send a Go key to the Provider API.
+      models: { providers: { commandcode: { api: 'openai-completions',
+        baseUrl: `http://127.0.0.1:${address.port}/provider/v1`, models: [{
+          id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek', reasoning: true, input: ['text'],
+          contextWindow: 131072, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        }] } } },
       // Test a direct tool round trip; 2026.10.7 defers schemas behind tool_search by default.
       tools: { allow: ['session_status'], toolSearch: false, codeMode: false },
     }));
     const env = { PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ''}`, HOME: resolve(state, 'home'),
       OPENCLAW_STATE_DIR: state, OPENCLAW_CONFIG_PATH: configPath, NO_COLOR: '1',
+      npm_config_cache: resolve(root, '.scratch/install-test-cache'), npm_config_fetch_retries: '0', npm_config_fetch_timeout: '30000',
       OPENCLAW_DIAGNOSTICS: '1', OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: resolve(state, 'timeline.jsonl') };
+    const cli = fileURLToPath(new URL('../../openclaw.mjs', import.meta.resolve('openclaw/plugin-sdk/plugin-entry')));
+    if (installed) {
+      const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
+      const install = spawnSync(process.execPath, [cli, 'plugins', 'install', resolve(root, `${pkg.name}-${pkg.version}.tgz`),
+        '--force', '--accept-capabilities'], { cwd: root, env, encoding: 'utf8', timeout: 180000 });
+      assert.equal(install.status, 0, install.stdout + install.stderr);
+    }
     const profileSetup = spawnSync(process.execPath, ['--input-type=module', '--eval', `
       import { upsertAuthProfile } from 'openclaw/plugin-sdk/provider-auth';
       upsertAuthProfile({ profileId: 'commandcode:default', credential: {
@@ -56,7 +79,6 @@ test('OpenClaw saved API-key profile reaches Go transport and completes a tool r
       }, agentDir: ${JSON.stringify(resolve(state, 'agents/main/agent'))} });
     `], { cwd: root, env, encoding: 'utf8', timeout: 30000 });
     assert.equal(profileSetup.status, 0, profileSetup.stderr);
-    const cli = fileURLToPath(new URL('../../openclaw.mjs', import.meta.resolve('openclaw/plugin-sdk/plugin-entry')));
     const child = spawn(process.execPath, [cli, 'agent', '--local', '--session-id', randomUUID(),
       '--message', 'Check session status, then answer.', '--json', '--timeout', '60'], {
       cwd: root, env,
