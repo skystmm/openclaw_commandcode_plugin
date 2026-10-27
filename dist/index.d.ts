@@ -1,7 +1,7 @@
 import { type ProviderPlugin } from 'openclaw/plugin-sdk/plugin-entry';
 import { type PluginConfig } from './config.js';
-import { type CommandCodeDiagnostic } from './transport.js';
-export declare function createProvider(config: PluginConfig, onDiagnostic?: (diagnostic: CommandCodeDiagnostic) => void): ProviderPlugin;
+import { type CommandCodeDiagnostic, type CommandCodeTrace } from './transport.js';
+export declare function createProvider(config: PluginConfig, onDiagnostic?: (diagnostic: CommandCodeDiagnostic) => void, onTrace?: (trace: CommandCodeTrace) => void): ProviderPlugin;
 declare const _default: Omit<{
     id: string;
     name: string;

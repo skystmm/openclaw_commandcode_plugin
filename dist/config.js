@@ -15,6 +15,7 @@ export const configSchema = {
         streamIdleTimeoutMs: { type: 'integer', minimum: 1, maximum: 3600000 },
         reasoningEffort: { type: 'string', enum: ['off', 'low', 'medium', 'high', 'xhigh', 'max'] },
         zdr: { type: 'boolean', default: false },
+        diagnostics: { type: 'boolean', default: false },
     },
 };
 export function parseConfig(value) {
@@ -39,6 +40,8 @@ export function parseConfig(value) {
         || new Set(obj.models).size !== obj.models.length
         || obj.models.some(m => typeof m !== 'string' || !m.trim() || m !== m.trim() || /[\r\n]/.test(m))))
         throw new Error('Invalid Command Code models');
+    if (obj.diagnostics !== undefined && typeof obj.diagnostics !== 'boolean')
+        throw new Error('Invalid Command Code diagnostics');
     if (obj.zdr !== undefined && typeof obj.zdr !== 'boolean')
         throw new Error('Invalid Command Code zdr');
     if (obj.reasoningEffort !== undefined && !configSchema.properties.reasoningEffort.enum.includes(obj.reasoningEffort)) {

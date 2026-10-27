@@ -56,8 +56,8 @@ test('registered provider logs safe upstream rejection details before the host m
     const address = server.address();
     assert.ok(address && typeof address !== 'string');
     let provider: ProviderPlugin | undefined;
-    entry.register!({ pluginConfig: { apiBase: `http://127.0.0.1:${address.port}` },
-      logger: { warn: (message: string) => logs.push(message) },
+    entry.register!({ pluginConfig: { apiBase: `http://127.0.0.1:${address.port}`, diagnostics: true },
+      logger: { warn: (message: string) => logs.push(message), info: (message: string) => logs.push(message) },
       registerProvider: (value: ProviderPlugin) => { provider = value; }, registerModelCatalogProvider: () => {},
     } as unknown as OpenClawPluginApi);
     type ResolveContext = Parameters<NonNullable<ProviderPlugin['resolveDynamicModel']>>[0];
@@ -68,11 +68,19 @@ test('registered provider logs safe upstream rejection details before the host m
       apiKey: 'local-private-test-key',
     })).result();
     assert.equal(final.errorCode, 'AUTH_REJECTED');
-    assert.equal(logs.length, 1);
-    assert.match(logs[0]!, /^\[commandcode-go\] request_failed /);
-    const diagnostic = JSON.parse(logs[0]!.slice('[commandcode-go] request_failed '.length));
+    const failure = logs.find(line => line.startsWith('[commandcode-go] request_failed '))!;
+    const diagnostic = JSON.parse(failure.slice('[commandcode-go] request_failed '.length));
     assert.deepEqual(diagnostic, { stage: 'http', credentialSource: 'runtime', httpStatus: 401, code: 'AUTH_REJECTED' });
-    assert.doesNotMatch(logs.join(''), /local-private-test-key|secret|127\.0\.0\.1/);
+    const traces = logs.filter(line => line.startsWith('[commandcode-go] trace '))
+      .map(line => JSON.parse(line.slice('[commandcode-go] trace '.length)));
+    assert.deepEqual(traces.map(t => t.event), ['request_start', 'response_received', 'request_failed']);
+    assert.ok(traces.every(t => t.url === `http://127.0.0.1:${address.port}/alpha/generate`));
+    assert.ok(traces.every(t => t.requestId === traces[0].requestId));
+    assert.equal(traces.at(-1).httpStatus, 401);
+    assert.equal(traces.at(-1).code, 'AUTH_REJECTED');
+    assert.equal(traces[0].completionKind, 'turn');
+    assert.ok(logs.some(line => line.includes('diagnostics_ready version=0.1.3')));
+    assert.doesNotMatch(logs.join(''), /local-private-test-key|secret|Authorization|Bearer/);
   } finally {
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));

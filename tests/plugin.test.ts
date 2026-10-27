@@ -25,7 +25,7 @@ test('manifest and runtime config validation use the same schema', () => {
   const manifest = JSON.parse(readFileSync(new URL('../openclaw.plugin.json', import.meta.url), 'utf8'));
   assert.deepEqual(manifest.configSchema, configSchema);
   for (const invalid of [{ apiBase: 'http://remote.test' }, { apiBase: 'https://user:secret@api.test' },
-    { apiBase: 'https://api.test/path' }, { streamIdleTimeoutMs: 0 }, { models: [] }, { unknown: true }]) {
+    { apiBase: 'https://api.test/path' }, { streamIdleTimeoutMs: 0 }, { models: [] }, { diagnostics: "true" }, { unknown: true }]) {
     assert.throws(() => parseConfig(invalid));
   }
   assert.equal(parseConfig({ apiBase: 'http://127.0.0.1:1234/' }).apiBase, 'http://127.0.0.1:1234');

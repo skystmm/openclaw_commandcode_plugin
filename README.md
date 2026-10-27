@@ -155,6 +155,38 @@ openclaw logs --follow
 
 在触发失败后查找 `[commandcode-go] request_failed`。`openclaw models status --agent main` 用于核对该 agent 实际选择的认证来源；CLI 能正常对话并不能单独证明 Gateway 发送了相同凭据或获得了相同路由权限。
 
+## 请求链路日志（v0.1.3）
+
+按需开启详细诊断，默认关闭。原有失败告警仍默认保留。
+
+```bash
+openclaw plugins update commandcode-go
+openclaw config set plugins.entries.commandcode-go.config.diagnostics true --strict-json
+openclaw gateway restart
+openclaw plugins inspect commandcode-go
+openclaw logs --follow
+```
+
+确认版本为 `0.1.3`，启动时应看到 `[commandcode-go] diagnostics_ready`。随后在发生问题的聊天发送普通消息，查找 `[commandcode-go] trace`：
+
+```text
+[commandcode-go] trace {"event":"request_start","requestId":"...","provider":"commandcode","model":"deepseek/deepseek-v4.1-flash","endpoint":"/alpha/generate","url":"https://api.commandcode.ai/alpha/generate","transport":"go-cli","completionKind":"turn","stage":"credentials","credentialSource":"runtime","elapsedMs":0}
+```
+
+- 同一次调用的 `requestId` 相同，每次调用独立生成；不是聊天 ID，也不是服务端 request ID。
+- `url` 为实际调用 URL，包含自定义 `apiBase`；生成请求不跟随重定向。`model` 是本次传输收到的模型 ID；`completionKind` 区分普通轮次 `turn` 与辅助补全 `simple`。
+- `response_received` 记录 HTTP 状态及收到响应头时的累计耗时；`first_event` 表示收到首个解析成功的 SSE 事件，不一定是首个答案 token。
+- `request_succeeded` 表示协议完整结束；`request_failed` / `request_aborted` 包含失败阶段和固定错误类别。所有 `elapsedMs` 均为从本地调用开始的累计毫秒数。
+- 有 `request_start` 无 `response_received`：结合终态确认准备、连接、超时或取消问题；HTTP 401、403、429 不再依靠 fallback 猜测。
+- 有 `diagnostics_ready` 但重现时没有 trace：尚不能确认进入了本插件的传输，继续检查宿主模型路由、认证冷却或其他请求前置错误。插件无法观察其他 provider 的调用，也无法说明宿主为何选择 fallback。
+
+日志不包含认证头、key、key 指纹、提示词、工具参数、对话内容、会话 ID、工作目录或服务端错误正文。分享日志前仍可脱敏自定义 URL 和模型 ID。诊断完成后关闭：
+
+```bash
+openclaw config set plugins.entries.commandcode-go.config.diagnostics false --strict-json
+openclaw gateway restart
+```
+
 ## 开发验证
 
 ```bash

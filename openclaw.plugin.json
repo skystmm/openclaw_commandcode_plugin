@@ -1,7 +1,7 @@
 {
   "id": "commandcode-go",
   "name": "Command Code Go",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Command Code Go plan models via the CLI HTTP transport",
   "providers": ["commandcode"],
   "setup": { "providers": [{ "id": "commandcode", "envVars": ["COMMANDCODE_API_KEY", "COMMAND_CODE_API_KEY"] }] },
@@ -20,7 +20,8 @@
       "requestTimeoutMs": { "type": "integer", "minimum": 1, "maximum": 3600000 },
       "streamIdleTimeoutMs": { "type": "integer", "minimum": 1, "maximum": 3600000 },
       "reasoningEffort": { "type": "string", "enum": ["off", "low", "medium", "high", "xhigh", "max"] },
-      "zdr": { "type": "boolean", "default": false }
+      "zdr": { "type": "boolean", "default": false },
+      "diagnostics": { "type": "boolean", "default": false }
     }
   }
 }

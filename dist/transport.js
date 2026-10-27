@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createAssistantMessageEventStream } from '@openclaw/ai/event-stream';
 import { API_BASE, CLI_VERSION, parseConfig } from './config.js';
 import { buildBody, stringifyBody, CommandCodeError } from './wire.js';
@@ -124,6 +124,21 @@ export function createCommandCodeStream(rawConfig = {}, deps = {}) {
         let stage = 'credentials';
         let credentialSource = 'missing';
         let httpStatus;
+        const requestId = randomUUID();
+        const traceStartedAt = performance.now();
+        const trace = (event, extra = {}) => {
+            if (!config.diagnostics)
+                return;
+            // Whitelist fields; never spread SDK contexts, errors, headers or provider payloads.
+            try {
+                deps.onTrace?.({ event, requestId, provider: 'commandcode',
+                    model: /^[a-zA-Z0-9/_.:-]{1,160}$/.test(model.id) ? model.id : '[redacted]',
+                    endpoint: '/alpha/generate', url: `${config.apiBase ?? API_BASE}/alpha/generate`, transport: 'go-cli', completionKind: deps.completionKind ?? 'turn',
+                    stage, credentialSource, elapsedMs: Math.round(performance.now() - traceStartedAt),
+                    ...(httpStatus !== undefined ? { httpStatus } : {}), ...extra });
+            }
+            catch { /* Diagnostics must never affect inference. */ }
+        };
         const emit = (event) => stream.push(event);
         let active;
         const close = () => {
@@ -141,10 +156,13 @@ export function createCommandCodeStream(rawConfig = {}, deps = {}) {
             try {
                 controller.signal.throwIfAborted();
                 const key = options.apiKey ?? process.env.COMMANDCODE_API_KEY ?? process.env.COMMAND_CODE_API_KEY;
+                credentialSource = options.apiKey !== undefined ? 'runtime' : process.env.COMMANDCODE_API_KEY !== undefined
+                    ? 'COMMANDCODE_API_KEY' : key !== undefined ? 'COMMAND_CODE_API_KEY' : 'missing';
+                if (!key?.trim())
+                    credentialSource = 'missing';
+                trace('request_start');
                 if (!key?.trim())
                     throw new CommandCodeError('Missing Command Code API key', 'MISSING_CREDENTIAL');
-                credentialSource = options.apiKey !== undefined ? 'runtime' : process.env.COMMANDCODE_API_KEY !== undefined
-                    ? 'COMMANDCODE_API_KEY' : 'COMMAND_CODE_API_KEY';
                 if (/[\r\n]/.test(key))
                     throw new CommandCodeError('Invalid Command Code API key', 'INVALID_CREDENTIAL');
                 stage = 'prepare';
@@ -168,6 +186,7 @@ export function createCommandCodeStream(rawConfig = {}, deps = {}) {
                 }), controller.signal, remaining(), 'Command Code request timeout');
                 stage = 'http';
                 httpStatus = response.status;
+                trace('response_received');
                 if (options.onResponse)
                     await bounded(Promise.resolve(options.onResponse({ status: response.status,
                         headers: Object.fromEntries(response.headers) }, model)), controller.signal, remaining(), 'Command Code response callback timeout');
@@ -207,8 +226,13 @@ export function createCommandCodeStream(rawConfig = {}, deps = {}) {
                 let finished = false;
                 let cacheWrite = 0;
                 const seenCalls = new Set();
+                let firstEvent = true;
                 for await (const raw of readEvents(response.body, controller.signal, config.streamIdleTimeoutMs ?? 300000)) {
                     controller.signal.throwIfAborted();
+                    if (firstEvent) {
+                        trace('first_event');
+                        firstEvent = false;
+                    }
                     const e = record(raw);
                     if (e.type === 'error')
                         throw providerError(e);
@@ -288,6 +312,7 @@ export function createCommandCodeStream(rawConfig = {}, deps = {}) {
                 if (!finished)
                     throw new CommandCodeError('Command Code stream ended before finish');
                 controller.signal.throwIfAborted();
+                trace('request_succeeded', { stopReason: message.stopReason });
                 emit({ type: 'done', reason: message.stopReason, message });
             }
             catch (error) {
@@ -298,6 +323,7 @@ export function createCommandCodeStream(rawConfig = {}, deps = {}) {
                 const code = message.stopReason === 'aborted' ? 'ABORTED'
                     : error instanceof CommandCodeError ? error.code ?? 'REQUEST_FAILED' : 'TRANSPORT_ERROR';
                 message.errorCode = code;
+                trace(message.stopReason === 'aborted' ? 'request_aborted' : 'request_failed', { code, stopReason: message.stopReason });
                 if (message.stopReason !== 'aborted') {
                     try {
                         deps.onDiagnostic?.({ stage, credentialSource, ...(httpStatus !== undefined ? { httpStatus } : {}), code });

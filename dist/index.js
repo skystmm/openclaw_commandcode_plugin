@@ -2,7 +2,7 @@ import { definePluginEntry, buildJsonPluginConfigSchema } from 'openclaw/plugin-
 import { createProviderApiKeyAuthMethod } from 'openclaw/plugin-sdk/provider-auth';
 import { API_BASE, DEFAULT_MODEL, GO_API, PROVIDER_ID, configSchema, parseConfig } from './config.js';
 import { createCommandCodeStream } from './transport.js';
-export function createProvider(config, onDiagnostic) {
+export function createProvider(config, onDiagnostic, onTrace) {
     const settings = parseConfig(config);
     const ids = settings.models ?? [DEFAULT_MODEL];
     const models = ids.map(id => ({
@@ -38,8 +38,8 @@ export function createProvider(config, onDiagnostic) {
                         apiKey: key, models } };
             } },
         // Both normal turns and direct/utility completions enforce the same Go wire contract.
-        createStreamFn: ctx => createCommandCodeStream(settings, { workingDir: ctx.workspaceDir, onDiagnostic }),
-        wrapSimpleCompletionStreamFn: ctx => createCommandCodeStream(settings, { workingDir: ctx.workspaceDir, onDiagnostic }),
+        createStreamFn: ctx => createCommandCodeStream(settings, { workingDir: ctx.workspaceDir, onDiagnostic, onTrace, completionKind: 'turn' }),
+        wrapSimpleCompletionStreamFn: ctx => createCommandCodeStream(settings, { workingDir: ctx.workspaceDir, onDiagnostic, onTrace, completionKind: 'simple' }),
     };
 }
 export default definePluginEntry({
@@ -55,7 +55,15 @@ export default definePluginEntry({
         } }),
     register(api) {
         const settings = parseConfig(api.pluginConfig);
-        api.registerProvider(createProvider(settings, diagnostic => api.logger.warn(`[commandcode-go] request_failed ${JSON.stringify(diagnostic)}`)));
+        api.registerProvider(createProvider(settings, diagnostic => api.logger.warn(`[commandcode-go] request_failed ${JSON.stringify(diagnostic)}`), trace => {
+            const line = `[commandcode-go] trace ${JSON.stringify(trace)}`;
+            if (trace.event === 'request_failed')
+                api.logger.warn(line);
+            else
+                api.logger.info(line);
+        }));
+        if (settings.diagnostics)
+            api.logger.info('[commandcode-go] diagnostics_ready version=0.1.3 transport=go-cli endpoint=/alpha/generate');
         api.registerModelCatalogProvider({ provider: PROVIDER_ID, kinds: ['text'],
             staticCatalog: () => (settings.models ?? [DEFAULT_MODEL]).map(model => ({
                 kind: 'text', provider: PROVIDER_ID, model, label: model, source: 'static',

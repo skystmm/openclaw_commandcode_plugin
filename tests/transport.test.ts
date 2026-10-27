@@ -223,3 +223,80 @@ test('unpaired calls are removed and long tool IDs remain paired on replay', asy
   assert.equal(call.content[0].toolCallId, result.content[0].toolCallId);
   assert.ok(call.content[0].toolCallId.length <= 64);
 });
+
+
+test('opt-in traces correlate Go request lifecycle without logging conversation or credentials', async () => {
+  const traces: any[] = [];
+  const stream = createCommandCodeStream({ diagnostics: true }, {
+    onTrace: trace => traces.push(trace),
+    fetch: async () => response([{ type: 'text-delta', text: 'private answer' }, finish]),
+  });
+  const final = await (await stream(model, { systemPrompt: 'private system', messages: [user] },
+    { apiKey: 'user_PRIVATE', sessionId: 'private-session' })).result();
+  assert.equal(final.stopReason, 'stop');
+  assert.deepEqual(traces.map(t => t.event), ['request_start', 'response_received', 'first_event', 'request_succeeded']);
+  for (const trace of traces) {
+    assert.equal(trace.requestId, traces[0].requestId);
+    assert.match(trace.requestId, /^[0-9a-f-]{36}$/);
+    assert.equal(trace.model, 'deepseek/deepseek-v4.1-flash');
+    assert.equal(trace.provider, 'commandcode');
+    assert.equal(trace.endpoint, '/alpha/generate');
+    assert.equal(trace.url, 'https://api.commandcode.ai/alpha/generate');
+    assert.equal(trace.credentialSource, 'runtime');
+    assert.ok(trace.elapsedMs >= 0);
+  }
+  assert.equal(traces[1].httpStatus, 200);
+  assert.equal(traces.at(-1).stopReason, 'stop');
+  assert.doesNotMatch(JSON.stringify(traces), /user_PRIVATE|private system|private answer|private-session|hello/);
+});
+
+test('trace failures retain precise stage and status, remain opt-in and tolerate broken log sinks', async () => {
+  for (const diagnostics of [false, true]) {
+    const traces: any[] = [];
+    const stream = createCommandCodeStream({ diagnostics }, {
+      onTrace: trace => traces.push(trace),
+      fetch: async () => new Response('private upstream user_PRIVATE', { status: 403 }),
+    });
+    const final = await (await stream(model, { messages: [user] }, { apiKey: 'user_PRIVATE' })).result();
+    assert.equal(final.errorCode, 'PERMISSION_REJECTED');
+    if (!diagnostics) assert.deepEqual(traces, []);
+    else {
+      assert.deepEqual(traces.map(t => t.event), ['request_start', 'response_received', 'request_failed']);
+      assert.equal(traces.at(-1).stage, 'http');
+      assert.equal(traces.at(-1).httpStatus, 403);
+      assert.equal(traces.at(-1).code, 'PERMISSION_REJECTED');
+      assert.doesNotMatch(JSON.stringify(traces), /private upstream|user_PRIVATE/);
+    }
+  }
+  const stream = createCommandCodeStream({ diagnostics: true }, {
+    onTrace: () => { throw new Error('logger failed'); },
+    fetch: async () => response([{ type: 'text-delta', text: 'ok' }, finish]),
+  });
+  assert.equal((await (await stream(model, { messages: [user] }, { apiKey: 'test' })).result()).stopReason, 'stop');
+});
+
+
+test('traces distinguish connection, rate limit and SSE failures and aborted requests', async () => {
+  for (const [fetcher, expectedStage, expectedCode, expectedStatus] of [
+    [async () => { throw new Error('private network URL'); }, 'connect', 'TRANSPORT_ERROR', undefined],
+    [async () => new Response('rate limited', { status: 429 }), 'http', 'RATE_LIMITED', 429],
+    [async () => response([{ type: 'error', error: { code: 'invalid_api_key' } }]), 'stream', 'AUTH_REJECTED', 200],
+  ] as const) {
+    const traces: any[] = [];
+    const stream = createCommandCodeStream({ diagnostics: true }, { fetch: fetcher, onTrace: t => traces.push(t) });
+    await (await stream(model, { messages: [user] }, { apiKey: 'test' })).result();
+    const terminal = traces.at(-1);
+    assert.equal(terminal.event, 'request_failed');
+    assert.equal(terminal.stage, expectedStage);
+    assert.equal(terminal.code, expectedCode);
+    assert.equal(terminal.httpStatus, expectedStatus);
+    assert.doesNotMatch(JSON.stringify(traces), /private network URL/);
+  }
+  const traces: any[] = [];
+  const controller = new AbortController();
+  controller.abort();
+  const stream = createCommandCodeStream({ diagnostics: true }, { onTrace: t => traces.push(t) });
+  await (await stream(model, { messages: [user] }, { apiKey: 'test', signal: controller.signal })).result();
+  assert.equal(traces.at(-1).event, 'request_aborted');
+  assert.equal(traces.at(-1).code, 'ABORTED');
+});

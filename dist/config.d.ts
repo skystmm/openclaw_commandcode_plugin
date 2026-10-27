@@ -12,6 +12,7 @@ export interface PluginConfig {
     streamIdleTimeoutMs?: number;
     reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     zdr?: boolean;
+    diagnostics?: boolean;
 }
 export declare const configSchema: {
     readonly type: "object";
@@ -55,6 +56,10 @@ export declare const configSchema: {
             readonly enum: readonly ["off", "low", "medium", "high", "xhigh", "max"];
         };
         readonly zdr: {
+            readonly type: "boolean";
+            readonly default: false;
+        };
+        readonly diagnostics: {
             readonly type: "boolean";
             readonly default: false;
         };
