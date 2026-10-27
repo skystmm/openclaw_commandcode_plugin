@@ -1,0 +1,26 @@
+{
+  "id": "commandcode-go",
+  "name": "Command Code Go",
+  "version": "0.1.0",
+  "description": "Command Code Go plan models via the CLI HTTP transport",
+  "providers": ["commandcode"],
+  "setup": { "providers": [{ "id": "commandcode", "envVars": ["COMMANDCODE_API_KEY", "COMMAND_CODE_API_KEY"] }] },
+  "providerAuthChoices": [{
+    "provider": "commandcode", "method": "api-key", "choiceId": "commandcode-api-key",
+    "choiceLabel": "Command Code API key", "groupId": "commandcode", "groupLabel": "Command Code",
+    "cliFlag": "--commandcode-api-key", "cliOption": "--commandcode-api-key <key>", "cliDescription": "Command Code API key"
+  }],
+  "configSchema": {
+    "type": "object", "additionalProperties": false,
+    "properties": {
+      "apiBase": { "type": "string", "default": "https://api.commandcode.ai" },
+      "models": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+      "contextWindow": { "type": "integer", "minimum": 1024, "maximum": 10000000 },
+      "maxOutputTokens": { "type": "integer", "minimum": 1, "maximum": 131072 },
+      "requestTimeoutMs": { "type": "integer", "minimum": 1, "maximum": 3600000 },
+      "streamIdleTimeoutMs": { "type": "integer", "minimum": 1, "maximum": 3600000 },
+      "reasoningEffort": { "type": "string", "enum": ["off", "low", "medium", "high", "xhigh", "max"] },
+      "zdr": { "type": "boolean", "default": false }
+    }
+  }
+}

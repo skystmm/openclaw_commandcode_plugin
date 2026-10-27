@@ -1,0 +1,66 @@
+{
+  "name": "openclaw-commandcode-go",
+  "version": "0.1.0",
+  "description": "Command Code Go plan provider for OpenClaw",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "docs",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=24.22.1 <25 || >=26.12.1"
+  },
+  "dependencies": {
+    "@openclaw/ai": "2026.10.7"
+  },
+  "peerDependencies": {
+    "openclaw": "2026.10.7"
+  },
+  "devDependencies": {
+    "openclaw": "2026.10.7",
+    "@types/node": "^24.0.0",
+    "typescript": "^6.0.3",
+    "tsx": "^4.23.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "providers": [
+      "commandcode"
+    ],
+    "compat": {
+      "pluginApi": "2026.10.7",
+      "minGatewayVersion": "2026.10.7"
+    },
+    "build": {
+      "openclawVersion": "2026.10.7",
+      "pluginSdkVersion": "2026.10.7"
+    }
+  },
+  "scripts": {
+    "test": "node --import tsx --test tests/transport.test.ts tests/http.test.ts tests/plugin.test.ts",
+    "test:agent": "npm run build && node --import tsx --test tests/agent.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "test:host": "node scripts/host-smoke.mjs",
+    "test:install": "node scripts/install-smoke.mjs",
+    "check": "npm run typecheck && npm test && npm run build",
+    "prepack": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skystmm/openclaw_commandcode_plugin.git"
+  },
+  "homepage": "https://github.com/skystmm/openclaw_commandcode_plugin#readme",
+  "bugs": {
+    "url": "https://github.com/skystmm/openclaw_commandcode_plugin/issues"
+  }
+}
