@@ -64,6 +64,19 @@ async function* readEvents(body, signal, idleMs) {
                 throw new CommandCodeError('Invalid Command Code SSE JSON');
             }
         }
+        // The CLI endpoint also emits bare newline-delimited JSON, not only SSE.
+        // Parse complete lines without exposing provider text in parser errors.
+        const trimmed = line.trim();
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            if (data.length)
+                throw new CommandCodeError('Mixed Command Code stream framing');
+            try {
+                return JSON.parse(trimmed);
+            }
+            catch {
+                throw new CommandCodeError('Invalid Command Code JSON line');
+            }
+        }
         if (line.startsWith('data:')) {
             const part = line.slice(5).replace(/^ /, '');
             frameSize += part.length;

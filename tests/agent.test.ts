@@ -9,7 +9,9 @@ import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 
 const installed = process.env.COMMANDCODE_TEST_INSTALLED === '1';
-test(`OpenClaw ${installed ? 'installed archive' : 'source plugin'} with a saved API-key profile overrides legacy API config and completes a Go tool round trip`, { timeout: 360000 }, async () => {
+const catalogOnly = process.env.COMMANDCODE_TEST_CATALOG_ONLY === '1';
+const ndjson = process.env.COMMANDCODE_TEST_NDJSON === '1';
+test(`OpenClaw ${installed ? 'installed archive' : 'source plugin'} with a saved API-key profile ${catalogOnly ? 'uses the plugin catalog without manual provider config' : 'overrides legacy API config'} and completes a Go ${ndjson ? 'NDJSON' : 'SSE'} tool round trip`, { timeout: 360000 }, async () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const state = mkdtempSync(resolve(tmpdir(), 'commandcode-go-agent-'));
   const fixture = resolve(state, 'plugin');
@@ -34,12 +36,12 @@ test(`OpenClaw ${installed ? 'installed archive' : 'source plugin'} with a saved
       assert.equal(req.headers.authorization, 'Bearer local-agent-test-only');
       const body = JSON.parse(text);
       requests.push(body);
-      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.writeHead(200, { 'content-type': ndjson ? 'application/x-ndjson' : 'text/event-stream' });
       const events = requests.length === 1 ? [
         { type: 'tool-call', toolCallId: 'smoke-call', toolName: 'session_status', input: {} },
         { type: 'finish', finishReason: 'tool-calls' },
       ] : [ { type: 'text-delta', text: 'GO_AGENT_SMOKE_OK' }, { type: 'finish', finishReason: 'stop' } ];
-      res.end(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join(''));
+      res.end(events.map(e => ndjson ? `${JSON.stringify(e)}\n` : `data: ${JSON.stringify(e)}\n\n`).join(''));
     } catch (error) { serverError = error as Error; res.writeHead(500); res.end(); }
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -53,11 +55,11 @@ test(`OpenClaw ${installed ? 'installed archive' : 'source plugin'} with a saved
       agents: { defaults: { workspace: resolve(state, 'workspace'), skipBootstrap: true,
         model: { primary: 'commandcode/deepseek/deepseek-v4.1-flash' } } },
       // Legacy configuration must not send a Go key to the Provider API.
-      models: { providers: { commandcode: { api: 'openai-completions',
+      ...!catalogOnly ? { models: { providers: { commandcode: { api: 'openai-completions',
         baseUrl: `http://127.0.0.1:${address.port}/provider/v1`, models: [{
           id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek', reasoning: true, input: ['text'],
           contextWindow: 131072, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        }] } } },
+        }] } } } } : {},
       // Test a direct tool round trip; 2026.10.7 defers schemas behind tool_search by default.
       tools: { allow: ['session_status'], toolSearch: false, codeMode: false },
     }));

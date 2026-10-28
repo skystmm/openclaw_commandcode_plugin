@@ -79,7 +79,7 @@ test('registered provider logs safe upstream rejection details before the host m
     assert.equal(traces.at(-1).httpStatus, 401);
     assert.equal(traces.at(-1).code, 'AUTH_REJECTED');
     assert.equal(traces[0].completionKind, 'turn');
-    assert.ok(logs.some(line => line.includes('diagnostics_ready version=0.1.3')));
+    assert.ok(logs.some(line => line.includes('diagnostics_ready version=0.1.4')));
     assert.doesNotMatch(logs.join(''), /local-private-test-key|secret|Authorization|Bearer/);
   } finally {
     server.closeAllConnections();

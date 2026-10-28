@@ -63,7 +63,7 @@ export default definePluginEntry({
                 api.logger.info(line);
         }));
         if (settings.diagnostics)
-            api.logger.info('[commandcode-go] diagnostics_ready version=0.1.3 transport=go-cli endpoint=/alpha/generate');
+            api.logger.info('[commandcode-go] diagnostics_ready version=0.1.4 transport=go-cli endpoint=/alpha/generate');
         api.registerModelCatalogProvider({ provider: PROVIDER_ID, kinds: ['text'],
             staticCatalog: () => (settings.models ?? [DEFAULT_MODEL]).map(model => ({
                 kind: 'text', provider: PROVIDER_ID, model, label: model, source: 'static',

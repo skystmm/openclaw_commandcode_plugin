@@ -107,7 +107,7 @@ cmd login
 
 ## 支持与限制
 
-- 支持文本、多轮、思考内容、工具调用和结果回传、稳定会话 UUID、SSE 增量、取消及连接/空闲超时。
+- 支持文本、多轮、思考内容、工具调用和结果回传、稳定会话 UUID、SSE / NDJSON 增量、取消及连接/空闲超时。
 - 流内错误、缺失 finish 和不完整工具调用会终止为错误；不自动重发，不切换到 Provider API，也不切换其他账号。
 - 默认模型的 `minimal/medium/xhigh` 分别映射到其支持的 `low/high/max`。可设置 `reasoningEffort` 显式指定；其他模型需选择其支持的档位。
 - `zdr: true` 会始终发送 `x-cmd-zdr: 1`；失败不会偷偷关闭。ZDR 可能改变可用上游与额度计量。
@@ -155,6 +155,18 @@ openclaw logs --follow
 
 在触发失败后查找 `[commandcode-go] request_failed`。`openclaw models status --agent main` 用于核对该 agent 实际选择的认证来源；CLI 能正常对话并不能单独证明 Gateway 发送了相同凭据或获得了相同路由权限。
 
+## Go JSON 行响应兼容（v0.1.4）
+
+`/alpha/generate` 的响应可能是逐行 JSON（NDJSON），不带 SSE 的 `data:` 前缀。v0.1.3 及更早版本会忽略这些行，出现 HTTP 200 后 `Command Code stream ended before finish`。v0.1.4 同时支持 NDJSON 和原有 SSE，包括 UTF-8 分片、CRLF 和末行没有换行的情况；错误事件仍会失败，缺失 finish 不会伪装成功。
+
+```bash
+openclaw plugins update commandcode-go
+openclaw gateway restart
+openclaw plugins inspect commandcode-go
+```
+
+确认版本至少为 `0.1.4`。若仍没有请求 trace，检查下文的旧 provider 禁用项，以及实际 agent 的模型配置。
+
 ## 请求链路日志（v0.1.3）
 
 按需开启详细诊断，默认关闭。原有失败告警仍默认保留。
@@ -167,7 +179,7 @@ openclaw plugins inspect commandcode-go
 openclaw logs --follow
 ```
 
-确认版本为 `0.1.3`，启动时应看到 `[commandcode-go] diagnostics_ready`。随后在发生问题的聊天发送普通消息，查找 `[commandcode-go] trace`：
+确认版本为 `0.1.4` 或以上，启动时应看到 `[commandcode-go] diagnostics_ready`。随后在发生问题的聊天发送普通消息，查找 `[commandcode-go] trace`：
 
 ```text
 [commandcode-go] trace {"event":"request_start","requestId":"...","provider":"commandcode","model":"deepseek/deepseek-v4.1-flash","endpoint":"/alpha/generate","url":"https://api.commandcode.ai/alpha/generate","transport":"go-cli","completionKind":"turn","stage":"credentials","credentialSource":"runtime","elapsedMs":0}
@@ -187,6 +199,29 @@ openclaw config set plugins.entries.commandcode-go.config.diagnostics false --st
 openclaw gateway restart
 ```
 
+## 插件已启用，但没有请求 trace
+
+OpenClaw 2026.10.7 中，插件 ID 是 `commandcode-go`，注册的 provider ID 是 `commandcode`。若旧配置残留：
+
+```json
+{ "plugins": { "entries": { "commandcode": { "enabled": false } } } }
+```
+
+该禁用项可能阻断 provider 运行时钩子的查找，即使 `commandcode-go` 本身显示 enabled。实机对照中，保留此项时查不到传输钩子；仅在内存中移除后，即可找到 Go 插件的 `createStreamFn` 和 `normalizeResolvedModel`。表现可能是旧模型走 `openai-completions` 后返回 403，或原生模型报 `No API provider registered for api: pi-messages`；后者发生在 HTTP 请求之前。
+
+如果你确实要使用本插件，先备份配置，检查并移除这条旧禁用设置，然后重启：
+
+```bash
+openclaw config get plugins.entries.commandcode.enabled
+# 仅当上一步确认是遗留的 false，且希望启用 Command Code Go 时执行
+openclaw config unset plugins.entries.commandcode.enabled
+openclaw gateway restart
+```
+
+保留 `plugins.entries.commandcode-go.enabled: true` 及 allow 列表中的 `commandcode-go`。无需更换 key，也无需把 api 改回 `openai-completions`。若其他插件导致 CLI 校验或加载失败，应分别处理，不能仅凭配置命令的退出状态认定已修改成功。
+
+另外，agent 自身的 `model.primary` 会覆盖全局默认值。插件默认发布 `deepseek/deepseek-v4.1-flash`；请核对实际 agent，而不是仅修改 `agents.defaults.model.primary`。模型菜单中的 `configured` / 认证可用标记不等于模型运行时已经成功；最终以独立测试的成功终态、正确 provider/model 及 `/alpha/generate` 请求 trace 为准。
+
 ## 开发验证
 
 ```bash
@@ -195,6 +230,10 @@ npm run typecheck
 npm run build
 npm run test:host
 npm run test:agent
+# 仅依赖插件目录，不配置 models.providers 的端到端测试
+COMMANDCODE_TEST_CATALOG_ONLY=1 npm run test:agent
+# 同一宿主闭环使用 Go JSON 行响应
+COMMANDCODE_TEST_CATALOG_ONLY=1 COMMANDCODE_TEST_NDJSON=1 npm run test:agent
 npm pack --dry-run
 ```
 

@@ -300,3 +300,33 @@ test('traces distinguish connection, rate limit and SSE failures and aborted req
   assert.equal(traces.at(-1).event, 'request_aborted');
   assert.equal(traces.at(-1).code, 'ABORTED');
 });
+
+
+test('Go CLI newline-delimited JSON completes across fragmented UTF-8 and an unterminated final line', async () => {
+  const bytes = new TextEncoder().encode([
+    { type: 'start' }, { type: 'text-delta', text: '杭州晴' }, finish,
+  ].map(e => JSON.stringify(e)).join('\r\n'));
+  const stream = createCommandCodeStream({}, { fetch: async () => new Response(new ReadableStream({
+    start(controller) { for (const byte of bytes) controller.enqueue(Uint8Array.of(byte)); controller.close(); },
+  }), { headers: { 'content-type': 'application/x-ndjson' } }) });
+  const result = await (await stream(model, { messages: [user] }, { apiKey: 'local-test' })).result();
+  assert.equal(result.stopReason, 'stop');
+  assert.deepEqual(result.content, [{ type: 'text', text: '杭州晴' }]);
+  assert.equal(result.usage.output, 12);
+});
+
+test('Go CLI NDJSON error events fail safely and malformed or truncated lines never succeed', async () => {
+  for (const [body, code] of [
+    [JSON.stringify({ type: 'error', error: { code: 'MODEL_NOT_IN_PLAN', message: 'private key user_TEST' } }), 'MODEL_NOT_IN_PLAN'],
+    ['{"type":"text-delta","text":"partial"}\n{"type":', 'REQUEST_FAILED'],
+    [JSON.stringify({ type: 'text-delta', text: 'partial' }), 'REQUEST_FAILED'],
+  ]) {
+    let calls = 0;
+    const stream = createCommandCodeStream({}, { fetch: async () => { calls++; return new Response(body); } });
+    const result = await (await stream(model, { messages: [user] }, { apiKey: 'user_TEST' })).result();
+    assert.equal(result.stopReason, 'error');
+    assert.equal(result.errorCode, code);
+    assert.equal(calls, 1);
+    assert.doesNotMatch(result.errorMessage!, /private key|user_TEST/);
+  }
+});

@@ -60,7 +60,7 @@ export default definePluginEntry({
         if (trace.event === 'request_failed') api.logger.warn(line);
         else api.logger.info(line);
       }));
-    if (settings.diagnostics) api.logger.info('[commandcode-go] diagnostics_ready version=0.1.3 transport=go-cli endpoint=/alpha/generate');
+    if (settings.diagnostics) api.logger.info('[commandcode-go] diagnostics_ready version=0.1.4 transport=go-cli endpoint=/alpha/generate');
     api.registerModelCatalogProvider({ provider: PROVIDER_ID, kinds: ['text'],
       staticCatalog: () => (settings.models ?? [DEFAULT_MODEL]).map(model => ({
         kind: 'text' as const, provider: PROVIDER_ID, model, label: model, source: 'static' as const,
