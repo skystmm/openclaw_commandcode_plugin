@@ -16,7 +16,10 @@ Parse bare JSON object/array lines as events while preserving SSE framing and mu
 - npm run check: 27 tests, TypeScript and generated dist build passed using Node 24.22.1.
 - `COMMANDCODE_TEST_CATALOG_ONLY=1 COMMANDCODE_TEST_NDJSON=1 npm run test:agent`: passed a native OpenClaw 2026.10.7 two-request tool round trip with a saved fake key, without manual provider config (63 seconds).
 - `npm pack --dry-run --ignore-scripts --cache .scratch/npm-cache`: packaging passed.
-- Real-service verification is recorded separately after its run completes; HTTP 200 alone is not a successful model turn.
+- Real server updated to 0.1.4. Direct SDK -> running Gateway -> Command Code Go checks completed successfully for main and platform_worker: status ok, provider commandcode, model deepseek/deepseek-v4.1-flash, and exact fixed response markers. These were independent diagnostic sessions with delivery disabled.
+- Direct SDK Gateway health returned ok. Existing Feishu session inventory contained no old v4 model selections in the inspected rows; a real Feishu user-message round trip was not sent.
+- Ordinary CLI control calls experienced timeouts and update cleanup did not exit promptly; their repair is not claimed. Verification used a direct SDK client, and installation/version and running-service state were checked separately. The server's memory-backend startup failure was handled as a separately authorized operation; it is not attributed to the Go parser.
+- No API key was printed or copied into this repository. Saved credentials were used by the host's normal authentication path.
 
 ## Review
 
